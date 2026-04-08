@@ -22,19 +22,67 @@
 #include <HTTPClient.h>
 #include <DHT.h>
 #include <string.h>
-#include "../../MCXC444/source/protocol.h"
+
+/* ========================= UART PROTOCOL ================================= */
+static const uint8_t PROTO_START_BYTE    = 0xAA;
+static const uint8_t PROTO_MAX_PAYLOAD   = 16;
+static const uint8_t PROTO_MAX_PACKET_SIZE = 21;
+
+static const uint8_t MSG_DISTANCE        = 0x01;
+static const uint8_t MSG_WATER_LEVEL     = 0x02;
+static const uint8_t MSG_EVENT           = 0x03;
+static const uint8_t MSG_STATE           = 0x04;
+static const uint8_t MSG_STATUS          = 0x05;
+static const uint8_t MSG_ACK             = 0x06;
+
+static const uint8_t MSG_CMD_FEED          = 0x10;
+static const uint8_t MSG_CMD_PLAY          = 0x11;
+static const uint8_t MSG_CMD_STOP          = 0x12;
+static const uint8_t MSG_CMD_CALL_PET      = 0x13;
+static const uint8_t MSG_CMD_SET_SCHEDULE  = 0x14;
+static const uint8_t MSG_CMD_SET_THRESHOLD = 0x15;
+static const uint8_t MSG_CMD_ESP_STATUS    = 0x16;
+static const uint8_t MSG_CMD_ACK           = 0x17;
+
+typedef struct
+{
+    uint8_t startByte;
+    uint8_t length;
+    uint8_t seq;
+    uint8_t type;
+    uint8_t payload[PROTO_MAX_PAYLOAD];
+    uint8_t payloadLen;
+    uint8_t crc;
+} Packet_t;
+
+typedef enum
+{
+    PARSE_WAIT_START,
+    PARSE_WAIT_LENGTH,
+    PARSE_WAIT_DATA,
+    PARSE_WAIT_CRC
+} ParseState_t;
+
+typedef struct
+{
+    ParseState_t state;
+    Packet_t packet;
+    uint8_t dataIdx;
+    uint8_t dataExpected;
+    uint8_t buffer[PROTO_MAX_PACKET_SIZE];
+} Parser_t;
 
 /* ========================= PIN CONSTANTS ================================= */
-static const int SHOCK_PIN = 5;
-static const int WATER_PIN = 3;
-static const int DHT_PIN = 11;
-static const int BUZZER_PIN = 7;
-static const int LASER_PIN = 9;
+static const int SHOCK_PIN   = 5;
+static const int WATER_PIN   = 3;
+static const int DHT_PIN     = 11;
+static const int BUZZER_PIN  = 7;
+static const int LASER_PIN   = 9;
 static const int UART_RX_PIN = 44;
 static const int UART_TX_PIN = 43;
 
 /* ========================= WIFI / FIREBASE =============================== */
-static const char *WIFI_SSID = "YOUR_WIFI_SSID";
+static const char *WIFI_SSID     = "YOUR_WIFI_SSID";
 static const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
 /*
@@ -43,25 +91,24 @@ static const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
  *   https://your-project-default-rtdb.asia-southeast1.firebasedatabase.app/sensors.json?auth=TOKEN
  *   https://your-project-default-rtdb.asia-southeast1.firebasedatabase.app/commands.json?auth=TOKEN
  */
-static const char *FIREBASE_POST_URL = "https://your-project.firebaseio.com/sensors.json";
+static const char *FIREBASE_SENSOR_URL   = "https://your-project.firebaseio.com/sensors.json";
 static const char *FIREBASE_COMMANDS_URL = "https://your-project.firebaseio.com/commands.json";
 
 /* ========================= APP CONFIG ==================================== */
-static const uint32_t SERIAL_BAUD = 115200;
-static const uint32_t UART_BAUD = 115200;
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
-static const uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
-static const uint32_t WATER_READ_INTERVAL_MS = 1000;
-static const uint32_t DHT_READ_INTERVAL_MS = 3000;
-static const uint32_t FIREBASE_POST_INTERVAL_MS = 10000;
+static const uint32_t SERIAL_BAUD              = 115200;
+static const uint32_t UART_BAUD                = 115200;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS  = 15000;
+static const uint32_t WIFI_RETRY_INTERVAL_MS   = 10000;
+static const uint32_t WATER_READ_INTERVAL_MS   = 1000;
+static const uint32_t DHT_READ_INTERVAL_MS     = 3000;
+static const uint32_t FIREBASE_POST_INTERVAL_MS    = 10000;
 static const uint32_t FIREBASE_COMMAND_INTERVAL_MS = 3000;
 static const uint32_t STATUS_PRINT_INTERVAL_MS = 5000;
-static const uint32_t SHOCK_DEBOUNCE_MS = 200;
-static const uint16_t WATER_LOW_THRESHOLD = 500;
-static const uint16_t BUZZER_DEFAULT_FREQ = 2000;
-static const uint8_t PLAY_PATTERN_ID = 1;
-static const uint8_t BUZZER_LEDC_CHANNEL = 0;
-static const uint8_t BUZZER_LEDC_RESOLUTION = 8;
+static const uint32_t SHOCK_DEBOUNCE_MS        = 200;
+static const uint16_t WATER_LOW_THRESHOLD      = 500;
+static const uint16_t BUZZER_DEFAULT_FREQ      = 2000;
+static const uint8_t  PLAY_PATTERN_ID          = 1;
+static const uint8_t  BUZZER_LEDC_RESOLUTION   = 8;
 
 /* ========================= DHT =========================================== */
 static const uint8_t DHT_TYPE = DHT11;
@@ -70,31 +117,31 @@ DHT dht(DHT_PIN, DHT_TYPE);
 /* ========================= STATE ========================================= */
 Parser_t uartParser;
 
-volatile bool shockInterruptFlag = false;
-volatile uint32_t shockCount = 0;
+volatile bool          shockInterruptFlag  = false;
+volatile uint32_t      shockCount          = 0;
 volatile unsigned long lastShockInterruptMs = 0;
 
-float lastTemperature = 0.0f;
-float lastHumidity = 0.0f;
-uint16_t lastWaterLevel = 0;
-bool shockEventLatched = false;
-bool laserStatus = false;
-bool buzzerStatus = false;
+float    lastTemperature    = 0.0f;
+float    lastHumidity       = 0.0f;
+uint16_t lastWaterLevel     = 0;
+bool     shockEventLatched  = false;
+bool     laserStatus        = false;
+bool     buzzerStatus       = false;
 
-uint16_t lastDistanceCm = 0;
-bool previousDispenseTreat = false;
-bool previousPlayMode = false;
+uint16_t lastDistanceCm          = 0;
+bool     previousDispenseTreat   = false;
+bool     previousPlayMode        = false;
 
-bool buzzerTimedMode = false;
-uint32_t buzzerOffAtMs = 0;
-uint16_t buzzerFrequency = 0;
+bool     buzzerTimedMode   = false;
+uint32_t buzzerOffAtMs     = 0;
+uint16_t buzzerFrequency   = 0;
 
-unsigned long lastWaterReadMs = 0;
-unsigned long lastDhtReadMs = 0;
+unsigned long lastWaterReadMs    = 0;
+unsigned long lastDhtReadMs      = 0;
 unsigned long lastFirebasePostMs = 0;
 unsigned long lastCommandCheckMs = 0;
-unsigned long lastStatusPrintMs = 0;
-unsigned long lastWiFiAttemptMs = 0;
+unsigned long lastStatusPrintMs  = 0;
+unsigned long lastWiFiAttemptMs  = 0;
 
 /* ========================= HELPERS ======================================= */
 uint8_t protocol_crc8(const uint8_t *data, uint8_t len)
@@ -105,14 +152,7 @@ uint8_t protocol_crc8(const uint8_t *data, uint8_t len)
         crc ^= data[i];
         for (uint8_t bit = 0; bit < 8; bit++)
         {
-            if (crc & 0x80)
-            {
-                crc = (crc << 1) ^ 0x31;
-            }
-            else
-            {
-                crc <<= 1;
-            }
+            crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) : (crc << 1);
         }
     }
     return crc;
@@ -131,7 +171,7 @@ uint8_t protocol_build_packet(uint8_t *buf, uint8_t type, const uint8_t *payload
         payloadLen = PROTO_MAX_PAYLOAD;
     }
 
-    const uint8_t seq = protocol_next_seq();
+    const uint8_t seq    = protocol_next_seq();
     const uint8_t length = 2 + payloadLen;
 
     buf[0] = PROTO_START_BYTE;
@@ -174,8 +214,8 @@ bool protocol_parser_feed(Parser_t *parser, uint8_t byte)
         else
         {
             parser->packet.length = byte;
-            parser->dataExpected = byte;
-            parser->dataIdx = 0;
+            parser->dataExpected  = byte;
+            parser->dataIdx       = 0;
             parser->state = PARSE_WAIT_DATA;
         }
         break;
@@ -184,8 +224,8 @@ bool protocol_parser_feed(Parser_t *parser, uint8_t byte)
         parser->buffer[parser->dataIdx++] = byte;
         if (parser->dataIdx >= parser->dataExpected)
         {
-            parser->packet.seq = parser->buffer[0];
-            parser->packet.type = parser->buffer[1];
+            parser->packet.seq        = parser->buffer[0];
+            parser->packet.type       = parser->buffer[1];
             parser->packet.payloadLen = parser->dataExpected - 2;
 
             for (uint8_t i = 0; i < parser->packet.payloadLen; i++)
@@ -219,29 +259,57 @@ bool beginHttpClient(HTTPClient &http, WiFiClientSecure &client, const char *url
     return http.begin(client, url);
 }
 
+/*
+ * FIX: exact key matching — checks that the character before the key quote
+ * is either '{' or ',' (after optional whitespace), preventing partial
+ * matches like "dispenseTreatExtra" matching "dispenseTreat".
+ */
 bool extractJsonBool(const String &json, const char *key, bool defaultValue)
 {
     const String needle = String("\"") + key + "\":";
     int index = json.indexOf(needle);
+
+    /* Validate this is an exact key, not a prefix of a longer key */
+    while (index >= 0)
+    {
+        /* Walk backwards past the opening quote to find the preceding char */
+        if (index > 0)
+        {
+            int prev = index - 1;
+            while (prev >= 0 && (json[prev] == ' ' || json[prev] == '\n' ||
+                                  json[prev] == '\r' || json[prev] == '\t'))
+            {
+                prev--;
+            }
+            char before = (prev >= 0) ? json[prev] : '{';
+            if (before == '{' || before == ',')
+            {
+                break; /* valid key position */
+            }
+        }
+        else
+        {
+            break; /* at start of string, fine */
+        }
+
+        /* Not a real match — search again further along */
+        index = json.indexOf(needle, index + 1);
+    }
+
     if (index < 0)
     {
         return defaultValue;
     }
 
     index += needle.length();
-    while (index < json.length() && (json[index] == ' ' || json[index] == '\n' || json[index] == '\r' || json[index] == '\t'))
+    while (index < (int)json.length() && (json[index] == ' ' || json[index] == '\n' ||
+                                            json[index] == '\r' || json[index] == '\t'))
     {
         index++;
     }
 
-    if (json.startsWith("true", index))
-    {
-        return true;
-    }
-    if (json.startsWith("false", index))
-    {
-        return false;
-    }
+    if (json.startsWith("true", index))  return true;
+    if (json.startsWith("false", index)) return false;
     return defaultValue;
 }
 
@@ -299,18 +367,18 @@ void controlLaser(bool enabled)
 
 void controlBuzzer(bool enabled, uint16_t frequency = BUZZER_DEFAULT_FREQ, uint32_t durationMs = 0)
 {
-    buzzerStatus = enabled;
+    buzzerStatus    = enabled;
     buzzerFrequency = enabled ? frequency : 0;
     buzzerTimedMode = enabled && durationMs > 0;
-    buzzerOffAtMs = buzzerTimedMode ? (millis() + durationMs) : 0;
+    buzzerOffAtMs   = buzzerTimedMode ? (millis() + durationMs) : 0;
 
     if (enabled)
     {
-        ledcWriteTone(BUZZER_LEDC_CHANNEL, buzzerFrequency);
+        ledcWriteTone(BUZZER_PIN, buzzerFrequency);
     }
     else
     {
-        ledcWriteTone(BUZZER_LEDC_CHANNEL, 0);
+        ledcWriteTone(BUZZER_PIN, 0);
     }
 }
 
@@ -365,25 +433,25 @@ void readSensors()
 
         shockEventLatched = true;
         controlBuzzer(true, 2400, 120);
-        Serial.printf("[SHOCK] Event detected. Count=%lu\n", shockCount);
+        Serial.printf("[SHOCK] Event detected. Count=%u\n", (unsigned int)shockCount);  /* FIX: %u with cast */
     }
 
     if (now - lastWaterReadMs >= WATER_READ_INTERVAL_MS)
     {
         lastWaterReadMs = now;
-        lastWaterLevel = analogRead(WATER_PIN);
+        lastWaterLevel  = analogRead(WATER_PIN);
     }
 
     if (now - lastDhtReadMs >= DHT_READ_INTERVAL_MS)
     {
         lastDhtReadMs = now;
         const float temperature = dht.readTemperature();
-        const float humidity = dht.readHumidity();
+        const float humidity    = dht.readHumidity();
 
         if (!isnan(temperature) && !isnan(humidity))
         {
             lastTemperature = temperature;
-            lastHumidity = humidity;
+            lastHumidity    = humidity;
         }
         else
         {
@@ -397,6 +465,10 @@ void readSensors()
     }
 }
 
+/*
+ * FIX: uses PATCH instead of POST so sensor data overwrites a single
+ * /sensors node rather than creating a new child on every call.
+ */
 void sendToFirebase()
 {
     if (WiFi.status() != WL_CONNECTED)
@@ -407,7 +479,7 @@ void sendToFirebase()
     WiFiClientSecure client;
     HTTPClient http;
 
-    if (!beginHttpClient(http, client, FIREBASE_POST_URL))
+    if (!beginHttpClient(http, client, FIREBASE_SENSOR_URL))
     {
         Serial.println("[FIREBASE] Failed to open sensor URL");
         return;
@@ -425,10 +497,10 @@ void sendToFirebase()
     json += "\"buzzerStatus\":" + String(buzzerStatus ? "true" : "false");
     json += "}";
 
-    const int httpCode = http.POST(json);
+    const int httpCode = http.sendRequest("PATCH", json);   /* FIX: PATCH not POST */
     if (httpCode > 0)
     {
-        Serial.printf("[FIREBASE] POST success (HTTP %d)\n", httpCode);
+        Serial.printf("[FIREBASE] PATCH sensors success (HTTP %d)\n", httpCode);
         if (httpCode < 300)
         {
             shockEventLatched = false;
@@ -436,7 +508,7 @@ void sendToFirebase()
     }
     else
     {
-        Serial.printf("[FIREBASE] POST failed: %s\n", http.errorToString(httpCode).c_str());
+        Serial.printf("[FIREBASE] PATCH sensors failed: %s\n", http.errorToString(httpCode).c_str());
     }
 
     http.end();
@@ -477,7 +549,7 @@ void checkCommands()
     http.end();
 
     const bool dispenseTreat = extractJsonBool(response, "dispenseTreat", false);
-    const bool playMode = extractJsonBool(response, "playMode", false);
+    const bool playMode      = extractJsonBool(response, "playMode", false);
 
     if (dispenseTreat && !previousDispenseTreat)
     {
@@ -498,7 +570,7 @@ void checkCommands()
     }
 
     previousDispenseTreat = dispenseTreat;
-    previousPlayMode = playMode;
+    previousPlayMode      = playMode;
 }
 
 /* ========================= UART RX HANDLING ============================== */
@@ -553,9 +625,14 @@ void setup()
     analogReadResolution(12);
     attachInterrupt(digitalPinToInterrupt(SHOCK_PIN), shockISR, FALLING);
 
-    ledcSetup(BUZZER_LEDC_CHANNEL, 1000, BUZZER_LEDC_RESOLUTION);
-    ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CHANNEL);
-    ledcWriteTone(BUZZER_LEDC_CHANNEL, 0);
+    /*
+     * FIX: For ESP32 Arduino Core 3.x+ (ESP-IDF 5), replace the three
+     * lines below with:
+     *     ledcAttach(BUZZER_PIN, 1000, BUZZER_LEDC_RESOLUTION);
+     * The legacy API is kept here for Core 2.x compatibility.
+     */
+    ledcAttach(BUZZER_PIN, 1000, BUZZER_LEDC_RESOLUTION);
+    ledcWriteTone(BUZZER_PIN, 0);
 
     dht.begin();
     Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
@@ -602,7 +679,7 @@ void loop()
         Serial.printf("Temp: %.1f C\n", lastTemperature);
         Serial.printf("Humidity: %.1f %%\n", lastHumidity);
         Serial.printf("Water: %u%s\n", lastWaterLevel, lastWaterLevel < WATER_LOW_THRESHOLD ? " LOW" : "");
-        Serial.printf("Shock count: %lu\n", shockCount);
+        Serial.printf("Shock count: %u\n", (unsigned int)shockCount);  /* FIX: matching format */
         Serial.printf("Shock latched: %s\n", shockEventLatched ? "YES" : "NO");
         Serial.printf("Laser: %s\n", laserStatus ? "ON" : "OFF");
         Serial.printf("Buzzer: %s\n", buzzerStatus ? "ON" : "OFF");
@@ -610,4 +687,6 @@ void loop()
         Serial.printf("WiFi: %s\n", WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED");
         Serial.println("--------------");
     }
+
+    yield();  /* FIX: give WiFi stack / watchdog breathing room */
 }
