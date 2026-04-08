@@ -82,8 +82,8 @@ static const int UART_RX_PIN = 44;
 static const int UART_TX_PIN = 43;
 
 /* ========================= WIFI / FIREBASE =============================== */
-static const char *WIFI_SSID     = "YOUR_WIFI_SSID";
-static const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+static const char *WIFI_SSID     = "shiras s24 ultra";
+static const char *WIFI_PASSWORD = "test1234";
 
 /*
  * Use full Firebase REST URLs here.
