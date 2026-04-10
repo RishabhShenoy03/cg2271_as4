@@ -32,7 +32,7 @@
 /* ========================= CHANGE THESE ================================== */
 #define WIFI_SSID       "shiras 24 ultra"
 #define WIFI_PASSWORD   "test1234"
-#define API_BASE_URL    "http://10.48.226.139:4000"    /* Your laptop LAN IP */
+#define API_BASE_URL    "http://10.71.16.139:4000"    /* Your laptop LAN IP */
 #define DEVICE_API_KEY  "device_dev_key"
 #define DEVICE_ID       "esp32s2-petpal"
 
@@ -49,11 +49,11 @@
 #define UART_BAUD           115200
 #define WIFI_TIMEOUT_MS     15000
 #define WIFI_RETRY_MS       10000
-#define TELEMETRY_INTERVAL  3000
-#define COMMAND_POLL_MS     2000
-#define WATER_READ_MS       1000
-#define DHT_READ_MS         3000
-#define STATUS_PRINT_MS     5000
+#define TELEMETRY_INTERVAL  500
+#define COMMAND_POLL_MS     500
+#define WATER_READ_MS       500
+#define DHT_READ_MS         2000
+#define STATUS_PRINT_MS     2000
 #define SHOCK_DEBOUNCE_MS   200
 #define PET_NEAR_CM         30
 #define PET_FAR_CM          60
