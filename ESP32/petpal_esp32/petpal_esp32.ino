@@ -85,13 +85,8 @@
 /* ========================= WATER LEVELS ================================== */
 #define WATER_EMPTY 300 /* 0   - 50   = empty  */
 #define WATER_LOW 2000  /* 50  - 500  = low    */
-<<<<<<< Updated upstream
-#define WATER_OK 2500  /* 500 - 2500 = ok     */
-                       /* 2500+      = full   */
-=======
 #define WATER_OK 2500   /* 500 - 2500 = ok     */
                         /* 2500+      = full   */
->>>>>>> Stashed changes
 
 /* ========================= COMMANDS TO MCXC444 =========================== */
 #define CMD_PET_STATUS 0x01
