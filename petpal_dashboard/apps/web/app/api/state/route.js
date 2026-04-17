@@ -1,7 +1,10 @@
 import { devicePath, firebaseFetch } from "../firebase";
 
-let lastLoggedEvent = null;
 let lastLoggedCommandId = null;
+let wasAroundPrev = false;
+let arrivalTime = null;
+let arrivalSensor = null;
+let playTracker = false;
 
 function firebaseTimeToIso(value) {
   const ms = Number(value);
@@ -20,55 +23,63 @@ export async function GET() {
 
     const receivedAt = firebaseTimeToIso(telemetry?.updatedAtMs) || telemetry?.updatedAt || null;
     const ultrasonicDetected = Number(telemetry?.distanceCm) <= Number(process.env.PET_DISTANCE_THRESHOLD_CM || 30);
-    const gyDetected = telemetry?.gyDetected === true;
-
-    const legacyIsAround = Boolean(ultrasonicDetected || gyDetected);
-    const legacyTriggerSensor = ultrasonicDetected && gyDetected
-      ? "ultrasonic+gy"
+    const shockDetected = telemetry?.shockDetected === true;
+    const isAround = Boolean(ultrasonicDetected || shockDetected);
+    const triggerSensor = ultrasonicDetected && shockDetected
+      ? "ultrasonic+shock"
       : ultrasonicDetected
         ? "ultrasonic"
-        : gyDetected
-          ? "gy"
+        : shockDetected
+          ? "shock"
           : null;
 
-    // Log new events to Firebase history (skip pet_left and boot)
-    if (telemetry?.lastEvent && telemetry.lastEvent !== lastLoggedEvent) {
-      lastLoggedEvent = telemetry.lastEvent;
-      const evt = telemetry.lastEvent;
-      if (evt !== "pet_left" && evt !== "boot") {
-        const kind = evt === "pet_arrived" ? "pet_around" : evt;
-        try {
-          await firebaseFetch(devicePath("/history/events"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              kind,
-              sensor: triggerSensor || "device",
-              message: kind,
-              ts: receivedAt || new Date().toISOString()
-            })
-          });
-        } catch (e) { /* don't block state response */ }
-      }
+    // Pet visit tracking
+    if (isAround && !wasAroundPrev) {
+      arrivalTime = receivedAt || new Date().toISOString();
+      arrivalSensor = triggerSensor || "unknown";
     }
 
-    // Log new commands to Firebase history
+    if (!isAround && wasAroundPrev && arrivalTime) {
+      const leftTime = receivedAt || new Date().toISOString();
+      const durationMs = new Date(leftTime).getTime() - new Date(arrivalTime).getTime();
+      const durationSec = Math.round(durationMs / 1000);
+      try {
+        await firebaseFetch(devicePath("/history/visits"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            arrivedAt: arrivalTime,
+            leftAt: leftTime,
+            durationSec,
+            sensor: arrivalSensor
+          })
+        });
+      } catch (e) { /* don't block state response */ }
+      arrivalTime = null;
+      arrivalSensor = null;
+    }
+
+    wasAroundPrev = isAround;
+
+    // Log new commands to Firebase history with labels
     if (command?.id && command.id !== lastLoggedCommandId) {
+      const wasPlaying = lastLoggedCommandId !== null && telemetry?.playServoMoving === true;
       lastLoggedCommandId = command.id;
+      let label = command.type;
+      if (command.type === "feed_now") {
+        label = "Dispense Treat";
+      } else if (command.type === "play_mode_toggle") {
+        playTracker = !playTracker;
+        label = playTracker ? "Play Mode On" : "Play Mode Off";
+      }
       try {
         await firebaseFetch(devicePath("/history/commands"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(command)
+          body: JSON.stringify({ ...command, label })
         });
       } catch (e) { /* don't block state response */ }
     }
-
-    const hasEspPresence = typeof telemetry?.petAround === "boolean";
-    const isAround = hasEspPresence ? telemetry.petAround === true : legacyIsAround;
-    const triggerSensor = telemetry?.lastTriggerSensor || legacyTriggerSensor;
-    const lastSeenAt = telemetry?.lastSeenAt || (isAround ? receivedAt : null);
-    const updatedAt = telemetry?.presenceUpdatedAt || receivedAt;
 
     return Response.json({
       ok: true,
@@ -80,9 +91,9 @@ export async function GET() {
         : null,
       presence: {
         isAround,
-        lastSeenAt,
+        lastSeenAt: isAround ? receivedAt : null,
         lastTriggerSensor: triggerSensor,
-        updatedAt
+        updatedAt: receivedAt
       },
       petEvents: [],
       commands: command ? [command] : [],

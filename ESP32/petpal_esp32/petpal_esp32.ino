@@ -43,8 +43,8 @@
 String nowIso();
 
 /* ========================= CHANGE THESE ================================== */
-#define WIFI_SSID "AndroidAP"
-#define WIFI_PASSWORD "yecg5819"
+#define WIFI_SSID "shiras 24 ultra"
+#define WIFI_PASSWORD "test1234"
 #define DEVICE_ID "esp32s2-petpal"
 
 /*
@@ -197,7 +197,7 @@ void IRAM_ATTR gyISR()
 
 void buzzerTone(uint16_t freq, uint16_t durationMs)
 {
-    ledcWriteTone(BUZZER_LEDC_CH, freq);
+    ledcWriteTone(BUZZER_PIN, freq);
     buzzerOn = true;
     if (durationMs > 0)
     {
@@ -208,7 +208,7 @@ void buzzerTone(uint16_t freq, uint16_t durationMs)
 
 void buzzerOff()
 {
-    ledcWriteTone(BUZZER_LEDC_CH, 0);
+    ledcWriteTone(BUZZER_PIN, 0);
     buzzerOn = false;
     buzzerTimedMode = false;
 }
@@ -792,9 +792,8 @@ void setup()
     dht.begin();
 
     /* Buzzer */
-    ledcSetup(BUZZER_LEDC_CH, 1000, 8);
-    ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CH);
-    ledcWriteTone(BUZZER_LEDC_CH, 0);
+    ledcAttach(BUZZER_PIN, 1000, 8);
+    ledcWriteTone(BUZZER_PIN, 0);
 
     /* Laser */
     pinMode(LASER_PIN, OUTPUT);

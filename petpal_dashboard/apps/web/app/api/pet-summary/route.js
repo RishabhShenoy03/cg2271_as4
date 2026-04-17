@@ -30,7 +30,7 @@ Examples:
 "😊 Your pet is hanging around and seems comfortable! Water is topped up and everything looks good."
 "😴 Your pet hasn't been by in a while. Everything else looks fine, but the water could use a refill."
 "🎉 Your pet just stopped by! They were recently fed and the environment is cozy."`;
-
+    console.log("[GROQ KEY]", process.env.GROQ_API_KEY ? "loaded" : "MISSING");
     const res = await fetch(GROQ_URL, {
       method: "POST",
       headers: {

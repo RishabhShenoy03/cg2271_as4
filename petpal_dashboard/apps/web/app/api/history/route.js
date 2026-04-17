@@ -2,20 +2,20 @@ import { devicePath, firebaseFetch } from "../firebase";
 
 export async function GET() {
   try {
-    const [events, commands] = await Promise.all([
-      firebaseFetch(devicePath("/history/events")),
+    const [visits, commands] = await Promise.all([
+      firebaseFetch(devicePath("/history/visits")),
       firebaseFetch(devicePath("/history/commands"))
     ]);
 
-    const petEvents = events
-      ? Object.entries(events).map(([id, ev]) => ({ id, ...ev })).reverse()
+    const visitList = visits
+      ? Object.entries(visits).map(([id, v]) => ({ id, ...v })).reverse()
       : [];
 
     const cmdList = commands
       ? Object.entries(commands).map(([id, cmd]) => ({ id, ...cmd })).reverse()
       : [];
 
-    return Response.json({ ok: true, petEvents, commands: cmdList });
+    return Response.json({ ok: true, visits: visitList, commands: cmdList });
   } catch (error) {
     return Response.json({ ok: false, error: error.message || "Firebase history error" }, { status: 500 });
   }

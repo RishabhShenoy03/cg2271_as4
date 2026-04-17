@@ -18,6 +18,23 @@ function fmtTs(ts) {
   return `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
 }
 
+function fmtDuration(sec) {
+  if (sec === null || sec === undefined) return "-";
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function prettySensor(sensor) {
+  if (!sensor) return "-";
+  if (sensor === "ultrasonic+shock") return "Ultrasonic + GY-521";
+  if (sensor === "ultrasonic") return "Ultrasonic";
+  if (sensor === "shock") return "GY-521";
+  return sensor;
+}
+
 function inPeriod(ts, period) {
   if (!ts) return false;
   if (period === "all") return true;
@@ -26,10 +43,9 @@ function inPeriod(ts, period) {
 }
 
 export default function HistoryPage() {
-  const [data, setData] = useState({ petEvents: [], commands: [] });
+  const [data, setData] = useState({ visits: [], commands: [] });
   const [error, setError] = useState("");
   const [period, setPeriod] = useState("7d");
-  const [eventType, setEventType] = useState("all");
   const [commandType, setCommandType] = useState("all");
 
   useEffect(() => {
@@ -38,7 +54,7 @@ export default function HistoryPage() {
         const res = await fetch("/api/history", { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to load history");
-        setData({ petEvents: json.petEvents || [], commands: json.commands || [] });
+        setData({ visits: json.visits || [], commands: json.commands || [] });
         setError("");
       } catch (err) {
         setError(err.message || "Unknown error");
@@ -50,13 +66,9 @@ export default function HistoryPage() {
     return () => clearInterval(id);
   }, []);
 
-  const filteredEvents = useMemo(() => {
-    return (data.petEvents || []).filter((ev) => {
-      const byTime = inPeriod(ev.ts, period);
-      const byType = eventType === "all" || ev.kind === eventType;
-      return byTime && byType;
-    });
-  }, [data.petEvents, period, eventType]);
+  const filteredVisits = useMemo(() => {
+    return (data.visits || []).filter((v) => inPeriod(v.arrivedAt, period));
+  }, [data.visits, period]);
 
   const filteredCommands = useMemo(() => {
     return (data.commands || []).filter((cmd) => {
@@ -88,50 +100,38 @@ export default function HistoryPage() {
         </label>
 
         <label>
-          Pet Data Type
-          <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
-            <option value="all">All</option>
-            <option value="pet_around">Pet Around</option>
-            <option value="shock">Shock</option>
-            <option value="feed_now">Feed</option>
-            <option value="play_start">Play Start</option>
-            <option value="play_stop">Play Stop</option>
-          </select>
-        </label>
-
-        <label>
           Command Type
           <select value={commandType} onChange={(e) => setCommandType(e.target.value)}>
             <option value="all">All</option>
-            <option value="feed_now">feed_now</option>
-            <option value="play_mode_toggle">play_mode_toggle</option>
+            <option value="feed_now">Dispense Treat</option>
+            <option value="play_mode_toggle">Play Mode</option>
           </select>
         </label>
       </section>
 
       <section className="history-grid">
         <article className="table-card">
-          <h3>Pet Data History</h3>
+          <h3>Pet Visit History</h3>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Type</th>
+                  <th>Arrived</th>
+                  <th>Left</th>
+                  <th>Duration</th>
                   <th>Sensor</th>
-                  <th>Message</th>
-                  <th>Time</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredEvents.length === 0 ? (
-                  <tr><td colSpan="4">No pet data in selected range.</td></tr>
+                {filteredVisits.length === 0 ? (
+                  <tr><td colSpan="4">No pet visits in selected range.</td></tr>
                 ) : (
-                  filteredEvents.map((ev) => (
-                    <tr key={ev.id}>
-                      <td>{ev.kind}</td>
-                      <td>{ev.sensor || "-"}</td>
-                      <td>{ev.message || "-"}</td>
-                      <td>{fmtTs(ev.ts)}</td>
+                  filteredVisits.map((v) => (
+                    <tr key={v.id}>
+                      <td>{fmtTs(v.arrivedAt)}</td>
+                      <td>{fmtTs(v.leftAt)}</td>
+                      <td>{fmtDuration(v.durationSec)}</td>
+                      <td>{prettySensor(v.sensor)}</td>
                     </tr>
                   ))
                 )}
@@ -158,7 +158,7 @@ export default function HistoryPage() {
                 ) : (
                   filteredCommands.map((cmd) => (
                     <tr key={cmd.id}>
-                      <td>{cmd.type}</td>
+                      <td>{cmd.label || cmd.type}</td>
                       <td>{cmd.status}</td>
                       <td>{cmd.source || "-"}</td>
                       <td>{fmtTs(cmd.executedAt || cmd.fetchedAt || cmd.createdAt)}</td>
