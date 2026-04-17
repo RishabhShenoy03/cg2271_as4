@@ -5,6 +5,7 @@ let wasAroundPrev = false;
 let arrivalTime = null;
 let arrivalSensor = null;
 let playTracker = false;
+let lastShockTime = 0;
 
 function firebaseTimeToIso(value) {
   const ms = Number(value);
@@ -24,12 +25,19 @@ export async function GET() {
     const receivedAt = firebaseTimeToIso(telemetry?.updatedAtMs) || telemetry?.updatedAt || null;
     const ultrasonicDetected = Number(telemetry?.distanceCm) <= Number(process.env.PET_DISTANCE_THRESHOLD_CM || 30);
     const shockDetected = telemetry?.shockDetected === true;
-    const isAround = Boolean(ultrasonicDetected || shockDetected);
-    const triggerSensor = ultrasonicDetected && shockDetected
+
+    // Keep pet "around" for 10s after shock so it doesn't flicker
+    if (shockDetected) {
+      lastShockTime = Date.now();
+    }
+    const shockRecent = (Date.now() - lastShockTime) < 10000;
+
+    const isAround = Boolean(ultrasonicDetected || shockDetected || shockRecent);
+    const triggerSensor = ultrasonicDetected && (shockDetected || shockRecent)
       ? "ultrasonic+shock"
       : ultrasonicDetected
         ? "ultrasonic"
-        : shockDetected
+        : (shockDetected || shockRecent)
           ? "shock"
           : null;
 

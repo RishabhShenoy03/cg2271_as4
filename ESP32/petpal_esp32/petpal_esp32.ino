@@ -160,6 +160,7 @@ bool inBinaryPacket = false;
 uint8_t binStep = 0;
 uint8_t parseType = 0;
 uint8_t parseHi = 0;
+uint8_t parseLo = 0;
 
 /* Text buffer for MCXC444 debug output */
 char textBuf[128];
@@ -225,15 +226,19 @@ void setLaser(bool on)
 
 void sendToMCX(uint8_t type)
 {
+    uint8_t chk = type;
     Serial1.write(0xBB);
     Serial1.write(type);
+    Serial1.write(chk);
 }
 
 void sendToMCX(uint8_t type, uint8_t data)
 {
+    uint8_t chk = type ^ data;
     Serial1.write(0xBB);
     Serial1.write(type);
     Serial1.write(data);
+    Serial1.write(chk);
 }
 
 void sendPetStatus(bool near)
@@ -339,30 +344,37 @@ void processSerial1()
                 binStep = 2;
                 break;
             case 2:
-                if (parseType == 0x01)
+                parseLo = b;
+                binStep = 3;
+                break;
+            case 3:
+            {
+                uint8_t expected = parseType ^ parseHi ^ parseLo;
+                if (b == expected)
                 {
-                    bool wasPetNear = petNear;
-                    lastDistanceCm = ((uint16_t)parseHi << 8) | b;
-
-                    /* Pet detection with hysteresis */
-                    if (lastDistanceCm < PET_NEAR_CM)
+                    if (parseType == 0x01)
                     {
-                        petNear = true;
-                    }
-                    else if (lastDistanceCm > PET_FAR_CM)
-                    {
-                        petNear = false;
-                    }
+                        lastDistanceCm = ((uint16_t)parseHi << 8) | parseLo;
 
-                    if (!wasPetNear && petNear)
-                    {
-                        lastUltrasonicMs = millis();
-                    }
+                        if (lastDistanceCm < PET_NEAR_CM)
+                        {
+                            petNear = true;
+                        }
+                        else if (lastDistanceCm > PET_FAR_CM)
+                        {
+                            petNear = false;
+                        }
 
-                    sendPetStatus(petNear);
+                        sendPetStatus(petNear);
+                    }
+                }
+                else
+                {
+                    Serial0.printf("[UART] Checksum fail: got 0x%02X expected 0x%02X\n", b, expected);
                 }
                 inBinaryPacket = false;
                 break;
+            }
             }
             continue;
         }
