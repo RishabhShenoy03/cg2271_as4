@@ -23,14 +23,33 @@ function firebaseTimeToIso(value) {
   return d.toISOString();
 }
 
+function latestVisitTime(visits) {
+  if (!visits) return null;
+
+  return Object.values(visits).reduce((latest, visit) => {
+    const ts = visit?.leftAt || visit?.arrivedAt;
+    if (!ts) return latest;
+
+    const time = new Date(ts).getTime();
+    if (Number.isNaN(time)) return latest;
+
+    if (!latest || time > new Date(latest).getTime()) {
+      return ts;
+    }
+    return latest;
+  }, null);
+}
+
 export async function GET() {
   try {
-    const [telemetry, command] = await Promise.all([
+    const [telemetry, command, visits] = await Promise.all([
       firebaseFetch(devicePath("/telemetry")),
-      firebaseFetch(devicePath("/command"))
+      firebaseFetch(devicePath("/command")),
+      firebaseFetch(devicePath("/history/visits"))
     ]);
 
     const receivedAt = firebaseTimeToIso(telemetry?.updatedAtMs) || telemetry?.updatedAt || null;
+    let lastSeenAt = latestVisitTime(visits);
     const ultrasonicDetected = Number(telemetry?.distanceCm) <= Number(process.env.PET_DISTANCE_THRESHOLD_CM || 30);
     const gyDetected = telemetry?.gyDetected === true || telemetry?.shockDetected === true;
     const devicePetAround = telemetry?.petAround === true;
@@ -54,6 +73,7 @@ export async function GET() {
     // Pet visit tracking
     if (isAround && !wasAroundPrev) {
       arrivalTime = receivedAt || new Date().toISOString();
+      lastSeenAt = arrivalTime;
       arrivalSensor = triggerSensor || "unknown";
       try {
         const createdVisit = await firebaseFetch(devicePath("/history/visits"), {
@@ -74,6 +94,7 @@ export async function GET() {
 
     if (!isAround && wasAroundPrev && arrivalTime) {
       const leftTime = receivedAt || new Date().toISOString();
+      lastSeenAt = leftTime;
       const durationMs = new Date(leftTime).getTime() - new Date(arrivalTime).getTime();
       const durationSec = Math.round(durationMs / 1000);
       try {
@@ -137,7 +158,7 @@ export async function GET() {
         : null,
       presence: {
         isAround,
-        lastSeenAt: isAround ? receivedAt : null,
+        lastSeenAt: isAround ? (receivedAt || lastSeenAt) : lastSeenAt,
         lastTriggerSensor: triggerSensor,
         updatedAt: receivedAt
       },
